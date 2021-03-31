@@ -313,6 +313,7 @@ class Entry:
             print(e)
             print("restarting browser!")
             time.sleep(5)
+            self.save_current_process()
             try:
                 self.progress_1 = self.fetch.get_progress() - 1
                 self.fetch.quit_browser()
@@ -325,12 +326,16 @@ class Entry:
 
     def destructor(self):
         print('saving current progress')
+        self.save_current_process()
+
+    def save_current_process(self):
         with open('local_data/process.json', 'w') as f:
             self.meta['{}_{}'.format(self.year, self.month)] = self.fetch.get_progress()
             f.write(json.dumps(self.meta))
 
     def _handle_single_timeout(self, signum, frame):
         print("Restart time out, restart restart!")
+        self.save_current_process()
         try:
             self.progress_1 = self.fetch.get_progress()
             self.fetch.quit_browser()
@@ -365,5 +370,5 @@ class Entry:
 
 
 if __name__ == '__main__':
-    entry = Entry("your-api-key-for-nyt-developer", 2020, 11)
+    entry = Entry("nyt-developer-api-key", 2020, 11)
     entry.run_single()
