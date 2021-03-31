@@ -2,12 +2,14 @@
 Code created in 2020.11.4 on MacOS, suitable for most current NYT webpage
 """
 from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
 import json
 import re
 import csv
 import threading
 import signal
 import time
+import atexit
 
 
 class StopFetchingException(Exception):
@@ -22,7 +24,7 @@ class SubscribeException(Exception):
     pass
 
 
-class FetchNTYArticlesMultiThread:
+class FetchNTYArticlesBase:
     def __init__(self, NTY_developer_key, start_year, start_month, month_number, filename, thread_lock,
                  previous_fetch=0,
                  driver_type=0):
@@ -42,7 +44,13 @@ class FetchNTYArticlesMultiThread:
         self.count = previous_fetch
         # using two browser driver
         if driver_type == 1:
-            self.browser = webdriver.Chrome(executable_path="./chromedriver")
+            chrome_options = Options()
+            chrome_options.add_argument('--no-sandbox')
+            chrome_options.add_argument('--disable-dev-shm-usage')
+            chrome_options.add_argument('--headless')
+            chrome_options.add_argument('blink-settings=imagesEnabled=false')
+            chrome_options.add_argument('--disable-gpu')
+            self.browser = webdriver.Chrome(executable_path="./chromedriver", options=chrome_options)
         elif driver_type == 0:
             self.browser = webdriver.Safari()
         # set time our parameter
@@ -96,6 +104,10 @@ class FetchNTYArticlesMultiThread:
             self.browser.get(
                 'https://api.nytimes.com/svc/archive/v1/{}/{}.json?api-key={}'.format(year, month, self.__api_key))
             json_raw = self.browser.find_element_by_tag_name('pre').text
+            print(json_raw)
+            with open("./local_data/{}_{}.json".format(year, month), "w") as f:
+                print('saving to local file')
+                f.write(json_raw)
         json_data = json.loads(json_raw)
 
         try:
@@ -121,79 +133,12 @@ class FetchNTYArticlesMultiThread:
         for per in article["byline"]['person']:
             authors.append("{} {} {}".format(per["firstname"], per["middlename"], per["lastname"]))
 
-        print("start to get webpage", end=" ")
-        self.__thread_lock.acquire()
-        self.browser.get(web_url)
-        self.__thread_lock.release()
-        print("end to get webpage", end=" ")
-        print(re.findall("\\$2.00 every 4 weeks for one year", self.browser.page_source))
-        if re.findall("\\$2.00 every 4 weeks for one year", self.browser.page_source):
-            raise SubscribeException("Subscribe window show up, restart browser!")
-        print("start to get article content", end="")
-        article_dom = self.browser.find_elements_by_name("articleBody")
-
-        if article_dom:
-            article_dom = article_dom[0]
+        if self.__thread_lock:
+            self.__thread_lock.acquire()
+            self.browser.get(web_url)
+            self.__thread_lock.release()
         else:
-            return None
-            # raise KeyError("Article body not found")
-        print("end to get webpage", end=" ")
-        paragraphs = article_dom.find_elements_by_class_name("StoryBodyCompanionColumn")
-        text_article = title + "\n"
-        print("start to combine paragraphs", end=str(self.count) + " ")
-        for p in paragraphs:
-            text_article += p.text
-            print("text is loaded!", end=str(self.count) + " ")
-
-            # separate subtitle with new lines \n
-            sub_div = p.find_elements_by_tag_name("div")
-            if sub_div:
-                print("sub div is found!", end=str(self.count) + " ")
-                sub_title = sub_div[0].find_elements_by_tag_name("h2")
-                if sub_title:
-                    print("sub title is found!", end=str(self.count) + " ")
-                    for t in sub_title:
-                        text_article = re.sub(t.text, "\n{}\n".format(t.text), text_article)
-        print("Fetch success!")
-        return [title, headline, text_article, authors, keywords, pub_data, web_url, document_type, section_name,
-                abstract, lead_paragraph, news_desk]
-
-    def quit_browser(self):
-        self.browser.quit()
-
-    def get_progress(self):
-        print("current count: %d" % self.count)
-        return self.count
-
-
-class FetchNTYArticlesSingleThread(FetchNTYArticlesMultiThread):
-    def __init__(self, NTY_developer_key, start_year, start_month, month_number, filename, thread_lock,
-                 previous_fetch=0, driver_type=0):
-        FetchNTYArticlesMultiThread.__init__(self, NTY_developer_key, start_year, start_month, month_number, filename,
-                                             thread_lock,
-                                             previous_fetch, driver_type)
-
-    def fetch_one_article(self, article):
-        signal.signal(signal.SIGALRM, self._handle_timeout)
-        signal.alarm(15)
-
-        web_url = article["web_url"]
-        print("\nfetching: {}\n".format(web_url), end="")
-        title = article["headline"]["main"]
-        keywords = article["keywords"]
-        abstract = article["abstract"]
-        pub_data = article["pub_date"]
-        document_type = article["document_type"]
-        section_name = article["section_name"]
-        lead_paragraph = article["lead_paragraph"]
-        news_desk = article["news_desk"]
-        headline = article["headline"]
-
-        authors = []
-        for per in article["byline"]['person']:
-            authors.append("{} {} {}".format(per["firstname"], per["middlename"], per["lastname"]))
-
-        self.browser.get(web_url)
+            self.browser.get(web_url)
         print(re.findall("\\$2.00 every 4 weeks for one year", self.browser.page_source))
         if re.findall("\\$2.00 every 4 weeks for one year", self.browser.page_source):
             raise SubscribeException("Subscribe window show up, restart browser!")
@@ -220,6 +165,20 @@ class FetchNTYArticlesSingleThread(FetchNTYArticlesMultiThread):
         print("Fetch success!")
         return [title, headline, text_article, authors, keywords, pub_data, web_url, document_type, section_name,
                 abstract, lead_paragraph, news_desk]
+
+    def quit_browser(self):
+        self.browser.quit()
+
+    def get_progress(self):
+        print("current count: %d" % self.count)
+        return self.count
+
+
+class FetchNTYArticlesSingleThread(FetchNTYArticlesBase):
+    def fetch_one_article(self, article):
+        signal.signal(signal.SIGALRM, self._handle_timeout)
+        signal.alarm(15)
+        FetchNTYArticlesBase.fetch_one_article(self, article)
 
     @staticmethod
     def _handle_timeout(signum, frame):
@@ -273,12 +232,12 @@ class MultiThread(threading.Thread):
         print("start thread: %d" % self.threadID)
         try:
 
-            self.__fetch = FetchNTYArticlesMultiThread(self.key, self.start_year,
-                                                       self.start_month, 1,
+            self.__fetch = FetchNTYArticlesBase(self.key, self.start_year,
+                                                self.start_month, 1,
                                                        "./result/result_{}.csv".format(self.start_month),
-                                                       self.thread_lock,
-                                                       self.start_index,
-                                                       self.driver_type)
+                                                self.thread_lock,
+                                                self.start_index,
+                                                self.driver_type)
             self.__fetch.run()
         except Exception as e:
             if type(e) == RestartException:
@@ -302,55 +261,73 @@ class MultiThread(threading.Thread):
 
 
 class Entry:
-    def __init__(self, key):
+    def __init__(self, key, year, month):
         self.key = key
         self.__restart_count = 0
         self.timeout = 10800
-        self.progress_1 = 7229
-        self.progress_2 = 1658
-        self.progress_3 = 253
+        self.progress_1 = 0
+        self.progress_2 = 0
+        self.progress_3 = 0
         self.thread1 = None
         self.thread2 = None
         self.thread3 = None
         self.fetch = None
+        self.meta = None
+        self.year = year
+        self.month = month
+        atexit.register(self.destructor)
 
-    def run(self):
-        # move timeout wrapper here
-        signal.signal(signal.SIGALRM, self._handle_timeout)
-        signal.alarm(self.timeout)
-        lock = threading.Lock()
-        print("Thread init progresses: %d %d %d" % (self.progress_1, self.progress_2, self.progress_3))
-        self.thread1 = MultiThread(1, "threading_1", 2020, 6, self.progress_1, lock, self.key, 0)
-        self.thread2 = MultiThread(2, "threading_2", 2020, 8, self.progress_2, lock, self.key, 1)
-        # self.thread3 = MultiThread(3, "threading_3", 2020, 7, self.progress_3, lock, 1)
-
-        self.thread1.start()
-        # self.thread2.start()
-        self.thread1.join()
-        self.thread2.join()
-        # self.thread3.start()
+    # def run(self):
+    #     # move timeout wrapper here
+    #     signal.signal(signal.SIGALRM, self._handle_timeout)
+    #     signal.alarm(self.timeout)
+    #     lock = threading.Lock()
+    #     print("Thread init progresses: %d %d %d" % (self.progress_1, self.progress_2, self.progress_3))
+    #     self.thread1 = MultiThread(1, "threading_1", 2020, 6, self.progress_1, lock, self.key, 0)
+    #     self.thread2 = MultiThread(2, "threading_2", 2020, 8, self.progress_2, lock, self.key, 1)
+    #     # self.thread3 = MultiThread(3, "threading_3", 2020, 7, self.progress_3, lock, 1)
+    #
+    #     self.thread1.start()
+    #     # self.thread2.start()
+    #     self.thread1.join()
+    #     self.thread2.join()
+    #     # self.thread3.start()
 
     def run_single(self):
+        with open('local_data/process.json', 'r') as f:
+            self.meta = json.loads(f.read())
+            if '{}_{}'.format(self.year, self.month) in self.meta:
+                self.progress_1 = self.meta['{}_{}'.format(self.year, self.month)]
+                print('continue at {}'.format(self.progress_1))
+            else:
+                self.meta['{}_{}'.format(self.year, self.month)] = 0
+                self.progress_1 = 0
+
         signal.signal(signal.SIGALRM, self._handle_single_timeout)
-        signal.alarm(20)
-        """self.fetch = FetchNTYArticlesSingleThread(self.key, 2020, 7, 1,
-                                                  "./result/result_{}.csv".format(7), None, self.progress_1, 0)
-        self.fetch.run()"""
+        signal.alarm(100)
         try:
-            self.fetch = FetchNTYArticlesSingleThread(self.key, 2020, 4, 1,
-                                                      "./result/result_{}.csv".format(4), None, self.progress_1, 0)
+            self.fetch = FetchNTYArticlesSingleThread(self.key, self.year, self.month, 1,
+                                                      "./result/result_{}.csv".format(11), None, self.progress_1, 1)
             self.fetch.run()
         except Exception as e:
             print(e)
             print("restarting browser!")
+            time.sleep(5)
             try:
-                self.progress_1 = self.fetch.get_progress()
+                self.progress_1 = self.fetch.get_progress() - 1
                 self.fetch.quit_browser()
             except Exception as e:
                 print("close browser error!")
                 print(e)
-                time.sleep(5)
+
+            time.sleep(5)
             self.run_single()
+
+    def destructor(self):
+        print('saving current progress')
+        with open('local_data/process.json', 'w') as f:
+            self.meta['{}_{}'.format(self.year, self.month)] = self.fetch.get_progress()
+            f.write(json.dumps(self.meta))
 
     def _handle_single_timeout(self, signum, frame):
         print("Restart time out, restart restart!")
@@ -360,33 +337,33 @@ class Entry:
         except Exception as e:
             print("Again close browser error!")
             print(e)
-            time.sleep(5)
             return
+        time.sleep(5)
         self.run_single()
 
-    def _handle_timeout(self, signum, frame):
-        print("Time out detected from entry level!")
-        self.progress_1 = self.thread1.get_progress()
-        self.progress_2 = self.thread2.get_progress()
-        # self.progress_3 = self.thread3.get_progress()
-        print("Thread updated progresses: %d %d" % (self.progress_1, self.progress_2))
-        self.thread1.shut_down()
-        print("thread 1 shut down")
-        time.sleep(3)
-        self.thread2.shut_down()
-        print("thread 2 shut down")
-        # time.sleep(3)
-        # self.thread3.shut_down()
-        print("thread 3 shut down")
-        time.sleep(3)
-        self.__restart_count += 1
-        if self.__restart_count < 1000:
-            print("restarting!")
-            self.run()
-        else:
-            print("Maximum restart from entry level")
+    # def _handle_timeout(self, signum, frame):
+    #     print("Time out detected from entry level!")
+    #     self.progress_1 = self.thread1.get_progress()
+    #     self.progress_2 = self.thread2.get_progress()
+    #     # self.progress_3 = self.thread3.get_progress()
+    #     print("Thread updated progresses: %d %d" % (self.progress_1, self.progress_2))
+    #     self.thread1.shut_down()
+    #     print("thread 1 shut down")
+    #     time.sleep(3)
+    #     self.thread2.shut_down()
+    #     print("thread 2 shut down")
+    #     # time.sleep(3)
+    #     # self.thread3.shut_down()
+    #     print("thread 3 shut down")
+    #     time.sleep(3)
+    #     self.__restart_count += 1
+    #     if self.__restart_count < 1000:
+    #         print("restarting!")
+    #         self.run()
+    #     else:
+    #         print("Maximum restart from entry level")
 
 
 if __name__ == '__main__':
-    entry = Entry("your-api-key-for-nyt-developer")
+    entry = Entry("your-api-key-for-nyt-developer", 2020, 11)
     entry.run_single()
