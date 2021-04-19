@@ -46,8 +46,11 @@ class FetchNTYArticlesBase:
         if driver_type == 1:
             chrome_options = Options()
             chrome_options.add_argument('--no-sandbox')
+            chrome_options.add_experimental_option("prefs", {'profile.managed_default_content_settings.javascript': 2})
             chrome_options.add_argument('--disable-dev-shm-usage')
-            chrome_options.add_argument('--headless')
+            # chrome_options.add_argument('--headless')
+            # uncomment following line in ubuntu
+            # chrome_options.add_argument('--proxy-server=socks5://10.15.89.127:10809')
             chrome_options.add_argument('blink-settings=imagesEnabled=false')
             chrome_options.add_argument('--disable-gpu')
             self.browser = webdriver.Chrome(executable_path="./chromedriver", options=chrome_options)
@@ -55,6 +58,14 @@ class FetchNTYArticlesBase:
             self.browser = webdriver.Safari()
         # set time our parameter
         self.browser.set_page_load_timeout(360)
+
+    def run_test(self):
+        self.fetch_month_meta(2020, 11)
+        result_list = []
+        for article in self.__response_details[self.count:]:
+            tem = self.fetch_one_article(article)
+            if tem:
+                result_list.append(tem)
 
     def run(self):
         NTY_developer_key, start_year, start_month, month_number = self.__init_parameters
@@ -64,7 +75,7 @@ class FetchNTYArticlesBase:
                 self.fetch_month_meta(data[0], data[1])
                 print("Total news: %d current process: %d" % (len(self.__response_details), self.count))
                 result_list = []
-                for article in self.__response_details[self.count:-1]:
+                for article in self.__response_details[self.count:]:
                     self.count += 1
                     tem = self.fetch_one_article(article)
                     if tem:
@@ -151,8 +162,9 @@ class FetchNTYArticlesBase:
             # raise KeyError("Article body not found")
         paragraphs = article_dom.find_elements_by_class_name("StoryBodyCompanionColumn")
         text_article = title + "\n"
-        print(len(paragraphs), end="  ")
+        print("paragraphs number: {}".format(len(paragraphs)), end="  ")
         for p in paragraphs:
+            print(len(p.text), end=" ")
             text_article += p.text
             # separate subtitle with new lines \n
             sub_div = p.find_elements_by_tag_name("div")
@@ -162,6 +174,7 @@ class FetchNTYArticlesBase:
                     print(len(sub_title), end="  ")
                     for t in sub_title:
                         text_article = re.sub(t.text, "\n{}\n".format(t.text), text_article)
+        print("article length: {}".format(len(text_article)))
         print("Fetch success!")
         return [title, headline, text_article, authors, keywords, pub_data, web_url, document_type, section_name,
                 abstract, lead_paragraph, news_desk]
@@ -177,8 +190,8 @@ class FetchNTYArticlesBase:
 class FetchNTYArticlesSingleThread(FetchNTYArticlesBase):
     def fetch_one_article(self, article):
         signal.signal(signal.SIGALRM, self._handle_timeout)
-        signal.alarm(15)
-        FetchNTYArticlesBase.fetch_one_article(self, article)
+        signal.alarm(3600)
+        return FetchNTYArticlesBase.fetch_one_article(self, article)
 
     @staticmethod
     def _handle_timeout(signum, frame):
@@ -304,10 +317,10 @@ class Entry:
                 self.progress_1 = 0
 
         signal.signal(signal.SIGALRM, self._handle_single_timeout)
-        signal.alarm(100)
+        signal.alarm(300)
         try:
             self.fetch = FetchNTYArticlesSingleThread(self.key, self.year, self.month, 1,
-                                                      "./result/result_{}.csv".format(11), None, self.progress_1, 1)
+                                                      "./result/result_{}_{}.csv".format(self.year, self.month), None, self.progress_1, 1)
             self.fetch.run()
         except Exception as e:
             print(e)
@@ -324,20 +337,27 @@ class Entry:
             time.sleep(5)
             self.run_single()
 
+    def run_test(self):
+        self.fetch = FetchNTYArticlesSingleThread(self.key, self.year, self.month, 1,
+                                                  "./result/test.csv".format(self.year, self.month), None,
+                                                  0, 1)
+        self.fetch.run_test()
+
     def destructor(self):
         print('saving current progress')
-        self.save_current_process()
+        if self.fetch:
+            self.save_current_process()
 
     def save_current_process(self):
         with open('local_data/process.json', 'w') as f:
-            self.meta['{}_{}'.format(self.year, self.month)] = self.fetch.get_progress()
+            self.meta['{}_{}'.format(self.year, self.month)] = self.fetch.get_progress() - 1
             f.write(json.dumps(self.meta))
 
     def _handle_single_timeout(self, signum, frame):
         print("Restart time out, restart restart!")
         self.save_current_process()
         try:
-            self.progress_1 = self.fetch.get_progress()
+            self.progress_1 = self.fetch.get_progress() - 1
             self.fetch.quit_browser()
         except Exception as e:
             print("Again close browser error!")
@@ -370,5 +390,5 @@ class Entry:
 
 
 if __name__ == '__main__':
-    entry = Entry("nyt-developer-api-key", 2020, 11)
+    entry = Entry("iX6VXE3DKksRYoYUZagwAaBHSWGikHRV", 2021, 3)
     entry.run_single()
